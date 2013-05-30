@@ -41,7 +41,12 @@ module Funnel
               ctx[res_name] = lambda do |this, name, attrs|
                 send(res_name, name) do
                   if attrs
-                    attrs.each { |key, value| send(key, value) }
+                    attrs.each do |key, value|
+                      if value.is_a?(V8::Object)
+                        value = value.inject({}) {|memo, (subkey, subvalue)| memo[subkey] = subvalue; memo}
+                      end
+                      send(key, value)
+                    end
                   end
                 end
               end
