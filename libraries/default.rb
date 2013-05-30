@@ -1,6 +1,10 @@
 module ChefFunnel
   extend self
 
+  # For later
+  module Python
+  end
+
   def patch_name_resolver
     # Include the name->filename mappings for JS recipes
     Chef::CookbookVersion.instance_eval do
@@ -57,7 +61,20 @@ module ChefFunnel
           end
           ctx.load(filename)
         elsif filename =~ /\.py$/
-          raise 'Soon'
+          chef_gem('ffi')
+          require 'ffi'
+          ChefFunnel::Python.module_exec do
+            extend FFI::Library
+            ffi_lib 'python'
+            attach_function :Py_InitializeEx, [:int], :void
+            attach_function :Py_Finalize, [], :void
+            attach_function :Py_GetVersion, [], :string
+            attach_function :PyRun_SimpleString, [ :string ], :int
+          end unless ChefFunnel::Python.methods.include?(:ffi_lib) # Only init it once
+          Python.Py_InitializeEx(0)
+          puts Python.Py_GetVersion
+          binding.pry
+          Python.Py_Finalize()
         else
           old_from_file.bind(self).(filename)
         end
