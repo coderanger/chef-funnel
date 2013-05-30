@@ -1,6 +1,6 @@
 # Here Be Dragons
 
-Okay, consider yourself warned. The ``funnel-js`` cookbook provides a way to
+Okay, consider yourself warned. The ``funnel`` cookbook provides a way to
 write Chef recipes in Javascript. Just put a ``.js`` file in your recipes folder
 just like you would with a normal Ruby recipe.
 
