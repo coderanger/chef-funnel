@@ -24,7 +24,8 @@ file('/tmp/something', {
 template('/tmp/another', {
   source: 'test.erb',
   variables: {
-    name: 'World'
+    name: node.name(),
+    server: node.fqdn
   }
 });
 ```
