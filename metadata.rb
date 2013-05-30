@@ -1,1 +1,1 @@
-name 'chef-funnel-js'
+name 'funnel-js'
