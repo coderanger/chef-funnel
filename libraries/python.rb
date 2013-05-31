@@ -27,6 +27,7 @@ module ChefFunnel
           # PyObject* PyRun_File(FILE *fp, const char *filename, int start, PyObject *globals, PyObject *locals)
           attach_function :PyRun_File, [:pointer, :string, :int, :pointer, :pointer], :pointer
           attach_function :Py_DecRef, [:pointer], :void
+          attach_function :Py_IncRef, [:pointer], :void
           attach_function :PyString_FromString, [:string], :pointer
           attach_function :PyModule_New, [:string], :pointer # new ref
           attach_function :PyModule_AddObject, [:pointer, :string, :pointer], :int # Steals ref to value
@@ -82,7 +83,27 @@ module ChefFunnel
           end
           const_set :PyObject, pyobject
           attach_variable :None, :_Py_NoneStruct, pyobject
+          # PyAPI_FUNC(void) PyErr_Print(void);
+          attach_function :PyErr_Print, [], :void
+          #  PyObject* PyObject_GetAttrString(PyObject *o, const char *attr_name)
+          attach_function :PyObject_GetAttrString, [:pointer, :string], :pointer
         end unless self.methods.include?(:ffi_lib) # Only init it once
+
+        def self.ruby_fns
+          @ruby_fns ||= []
+        end
+
+        def self.repr(obj)
+          repr_str_obj = PyObject_Repr(obj)
+          repr_str = PyString_AsString(repr_str_obj).dup
+          Py_DecRef(repr_str_obj)
+          repr_str
+        end
+
+        def self.none
+          builtins = PyImport_AddModule('__builtins__')
+          PyObject_GetAttrString(builtins, '__doc__')
+        end
       end
     end
 
@@ -101,14 +122,16 @@ module ChefFunnel
         LibPy.PyArg_ParseTuple(args, 's', :pointer, msgptr)
         msg = msgptr.read_pointer().read_string()
         Chef::Log.debug(msg)
+        nil
       end
       LibPy.PyModule_AddObject(chef_mod, 'debug', debug_fn)
       file_fn = create_keyword_method('file') do |args, kwargs|
-        binding.pry
+        nil
       end
       LibPy.PyModule_AddObject(chef_mod, 'file', file_fn)
       run_file(filename)
       LibPy.Py_Finalize()
+      LibPy.ruby_fns.clear
     end
 
     def create_module(name)
@@ -126,11 +149,13 @@ module ChefFunnel
         method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
         method_def[:ml_flags] = self::METH_VARARGS
         method_def[:ml_doc] = 0
-        method_def[:ml_meth] = lambda do |pyself, args|
+        ruby_fn = lambda do |pyself, args|
           ret = block.call(args)
-          ret = self.None if ret.nil?
+          ret = none if ret.nil?
           ret
         end
+        ruby_fns << ruby_fn # To prevent GC
+        method_def[:ml_meth] = ruby_fn
         name_str_obj = PyString_FromString(name)
         fn = PyCFunction_NewEx(method_def, nil, name_str_obj)
         Py_DecRef(name_str_obj)
@@ -144,11 +169,13 @@ module ChefFunnel
         method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
         method_def[:ml_flags] = self::METH_KEYWORDS
         method_def[:ml_doc] = 0
-        method_def[:ml_meth] = lambda do |pyself, args, kwargs|
+        ruby_fn = lambda do |pyself, args, kwargs|
           ret = block.call(args, kwargs)
-          ret = self.None if ret.nil?
+          ret = none if ret.nil?
           ret
         end
+        ruby_fns << ruby_fn # To prevent GC
+        method_def[:ml_meth] = ruby_fn
         name_str_obj = PyString_FromString(name)
         fn = PyCFunction_NewEx(method_def, nil, name_str_obj)
         Py_DecRef(name_str_obj)
@@ -160,17 +187,13 @@ module ChefFunnel
       inf = LibC.fopen(filename, 'rb')
       main_mod = LibPy.PyImport_AddModule('__main__')
       main_dict = LibPy.PyModule_GetDict(main_mod)
-      LibPy.PyRun_File(inf, filename, LibPy::Py_file_input, main_dict, main_dict)
-      LibC.fclose(inf)
-    end
-
-    def repr(obj)
-      LibPy.module_eval do
-        repr_str_obj = PyObject_Repr(obj)
-        repr_str = PyString_AsString(repr_str_obj).dup
-        Py_DecRef(repr_str_obj)
-        repr_str
+      ret = LibPy.PyRun_File(inf, filename, LibPy::Py_file_input, main_dict, main_dict)
+      if ret.null?
+        # Something went wrong
+        LibPy.PyErr_Print()
+        raise 'Exception from Python'
       end
+      LibC.fclose(inf)
     end
   end
 end
