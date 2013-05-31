@@ -11,10 +11,7 @@ module ChefFunnel
       ctx = V8::Context.new
       ctx['debug'] = lambda {|this, msg| Chef::Log.debug(msg)}
       ctx['node'] = @recipe.node
-      Chef::Resource.constants.each do |res_class_name|
-        res_class = Chef::Resource.const_get(res_class_name)
-        next unless res_class.is_a?(Class) && res_class < Chef::Resource
-        res_name = @recipe.convert_to_snake_case(res_class_name.to_s)
+      self.each_resource do |res_name|
         ctx[res_name] = lambda do |this, name, *args|
           attrs = args.first
           @recipe.send(res_name, name) do

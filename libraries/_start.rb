@@ -27,6 +27,16 @@ module ChefFunnel
     def execute(filename)
       raise NotImplementedError
     end
+
+    # Loop over all resources in Chef
+    def each_resource(&block)
+      Chef::Resource.constants.each do |res_class_name|
+        res_class = Chef::Resource.const_get(res_class_name)
+        next unless res_class.is_a?(Class) && res_class < Chef::Resource
+        res_name = @recipe.convert_to_snake_case(res_class_name.to_s)
+        block.call(res_name, res_class)
+      end
+    end
   end
 
   def patch_name_resolver
