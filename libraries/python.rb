@@ -53,6 +53,17 @@ module ChefFunnel
                    :ml_doc, :pointer
           end
           const_set :PyMethodDef, pymethoddef
+          # typedef PyObject *(*PyCFunctionWithKeywords)(PyObject *, PyObject *, PyObject *);
+          callback :pycfunctionwithkeywords, [:pointer, :pointer, :pointer], :pointer
+          pycfunctionwithkeywords = find_type :pycfunctionwithkeywords
+          # Python shoves multiple callback types into the PyCFunction*, RAGE
+          pymethoddefwithkeywords = Class.new(::FFI::Struct) do
+            layout :ml_name, :pointer,
+                   :ml_meth, pycfunctionwithkeywords,
+                   :ml_flags, :int,
+                   :ml_doc, :pointer
+          end
+          const_set :PyMethodDefWithKeywords, pymethoddefwithkeywords
           # PyObject *PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
           attach_function :PyCFunction_NewEx, [pymethoddef, :pointer, :pointer], :pointer
           # int PyArg_ParseTuple(PyObject *args, const char *format, ...)
@@ -65,6 +76,12 @@ module ChefFunnel
           attach_function :PyInt_FromLong, [:long], :pointer
           const_set :Py_file_input, 257
           const_set :METH_VARARGS, 1
+          const_set :METH_KEYWORDS, 2
+          pyobject = Class.new(::FFI::Struct) do
+            layout :ignore, :pointer
+          end
+          const_set :PyObject, pyobject
+          attach_variable :None, :_Py_NoneStruct, pyobject
         end unless self.methods.include?(:ffi_lib) # Only init it once
       end
     end
@@ -86,6 +103,10 @@ module ChefFunnel
         Chef::Log.debug(msg)
       end
       LibPy.PyModule_AddObject(chef_mod, 'debug', debug_fn)
+      file_fn = create_keyword_method('file') do |args, kwargs|
+        binding.pry
+      end
+      LibPy.PyModule_AddObject(chef_mod, 'file', file_fn)
       run_file(filename)
       LibPy.Py_Finalize()
     end
@@ -106,8 +127,27 @@ module ChefFunnel
         method_def[:ml_flags] = self::METH_VARARGS
         method_def[:ml_doc] = 0
         method_def[:ml_meth] = lambda do |pyself, args|
-          block.call(args)
-          PyInt_FromLong(0)
+          ret = block.call(args)
+          ret = self.None if ret.nil?
+          ret
+        end
+        name_str_obj = PyString_FromString(name)
+        fn = PyCFunction_NewEx(method_def, nil, name_str_obj)
+        Py_DecRef(name_str_obj)
+        fn
+      end
+    end
+
+    def create_keyword_method(name, &block)
+      LibPy.module_eval do
+        method_def = self::PyMethodDefWithKeywords.new
+        method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
+        method_def[:ml_flags] = self::METH_KEYWORDS
+        method_def[:ml_doc] = 0
+        method_def[:ml_meth] = lambda do |pyself, args, kwargs|
+          ret = block.call(args, kwargs)
+          ret = self.None if ret.nil?
+          ret
         end
         name_str_obj = PyString_FromString(name)
         fn = PyCFunction_NewEx(method_def, nil, name_str_obj)
@@ -122,6 +162,15 @@ module ChefFunnel
       main_dict = LibPy.PyModule_GetDict(main_mod)
       LibPy.PyRun_File(inf, filename, LibPy::Py_file_input, main_dict, main_dict)
       LibC.fclose(inf)
+    end
+
+    def repr(obj)
+      LibPy.module_eval do
+        repr_str_obj = PyObject_Repr(obj)
+        repr_str = PyString_AsString(repr_str_obj).dup
+        Py_DecRef(repr_str_obj)
+        repr_str
+      end
     end
   end
 end
