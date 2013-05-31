@@ -78,35 +78,6 @@ module ChefFunnel
 
     def execute(filename)
       LibPy.Py_InitializeEx(0)
-      chef_mod = Python.PyModule_New('chef')
-      modules = Python.PyImport_GetModuleDict()
-      Python.PyDict_SetItemString(modules, 'chef', chef_mod)
-      debugdef = Python::PyMethodDef.new
-      #binding.pry
-      debugdef[:ml_name] = FFI::MemoryPointer.from_string('debug')
-      debugdef[:ml_flags] = Python::METH_VARARGS
-      debugdef[:ml_doc] = 0
-      debugdef[:ml_meth] = lambda do |pyself, args|
-        msgptr = FFI::MemoryPointer.new(:pointer)
-        Python.PyArg_ParseTuple(args, 's', :pointer, msgptr)
-        msg = msgptr.read_pointer().read_string()
-        Chef::Log.debug(msg)
-        Python.PyInt_FromLong(0)
-      end
-      nameobj = Python.PyString_FromString('debug')
-      debugfn = Python.PyCFunction_NewEx(debugdef, nil, nameobj)
-      Python.Py_DecRef(nameobj)
-      Python.PyModule_AddObject(chef_mod, 'debug', debugfn)
-      inf = Libc.fopen(filename, 'rb')
-      mainmod = Python.PyImport_AddModule('__main__')
-      maindict = Python.PyModule_GetDict(mainmod)
-      Python.PyRun_File(inf, filename, Python::Py_file_input, maindict, maindict)
-      Libc.fclose(inf)
-      LibPy.Py_Finalize()
-    end
-
-    def execute(filename)
-      LibPy.Py_InitializeEx(0)
       chef_mod = create_module('chef')
       debug_fn = create_method('debug') do |args|
         msgptr = FFI::MemoryPointer.new(:pointer)
