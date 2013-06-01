@@ -79,30 +79,107 @@ module ChefFunnel
           const_set :METH_VARARGS, 1
           const_set :METH_KEYWORDS, 2
           pyobject = Class.new(::FFI::Struct) do
-            layout :ignore, :pointer
+            layout :ob_refcnt, LibPy.ssize_t_type, :ob_type, :pointer
           end
           const_set :PyObject, pyobject
-          attach_variable :None, :_Py_NoneStruct, pyobject
+          attach_variable :None, :_Py_NoneStruct, :pointer
           # PyAPI_FUNC(void) PyErr_Print(void);
           attach_function :PyErr_Print, [], :void
           #  PyObject* PyObject_GetAttrString(PyObject *o, const char *attr_name)
           attach_function :PyObject_GetAttrString, [:pointer, :string], :pointer
+          # int PyDict_Next(PyObject *p, Py_ssize_t *ppos, PyObject **pkey, PyObject **pvalue)
+          attach_function :PyDict_Next, [:pointer, :pointer, :pointer, :pointer], :int
+          # int PyString_AsStringAndSize(PyObject *obj, char **buffer, Py_ssize_t *length)
+          attach_function :PyString_AsStringAndSize, [:pointer, :pointer, :pointer], :int
+          # long PyInt_AsLong(PyObject *io)
+          attach_function :PyInt_AsLong, [:pointer], :long
+          # double PyFloat_AsDouble(PyObject *pyfloat)
+          attach_function :PyFloat_AsDouble, [:pointer], :double
+          # PyObject* PyObject_GetIter(PyObject *o)
+          attach_function :PyObject_GetIter, [:pointer], :pointer
+          # PyObject* PyIter_Next(PyObject *o)
+          attach_function :PyIter_Next, [:pointer], :pointer
+          attach_variable :PyString_Type, pyobject
+          attach_variable :PyInt_Type, pyobject
+          attach_variable :PyFloat_Type, pyobject
+          attach_variable :PyDict_Type, pyobject
         end unless self.methods.include?(:ffi_lib) # Only init it once
+      end
 
-        def self.ruby_fns
-          @ruby_fns ||= []
+      def self.ruby_fns
+        @ruby_fns ||= []
+      end
+
+      def self.repr(obj)
+        repr_str_obj = PyObject_Repr(obj)
+        repr_str = PyString_AsString(repr_str_obj).dup
+        Py_DecRef(repr_str_obj)
+        repr_str
+      end
+
+      def self.none
+        builtins = PyImport_AddModule('__builtins__')
+        PyObject_GetAttrString(builtins, '__doc__')
+      end
+
+      def self.ssize_t_type
+        @ssize_t_type ||= "int#{find_type(:size_t).size * 8}".to_sym
+      end
+
+      module ConvertTypes
+        extend self
+
+        def convert(obj)
+          pyobj = LibPy::PyObject.new(obj)
+          case pyobj.values[1] # ob_type
+          when LibPy.PyString_Type.pointer
+            str(obj)
+          when LibPy.PyInt_Type.pointer
+            LibPy.PyInt_AsLong(obj)
+          when LibPy.PyFloat_Type.pointer
+            LibPy.PyFloat_AsDouble(obj)
+          when LibPy.PyDict_Type.pointer
+            dict(obj)
+          else
+            iterator = LibPy.PyObject_GetIter(obj)
+            if iterator.null?
+              nil # Default mapped value
+            else
+              ret = iterable(iterator, obj)
+              LibPy.Py_DecRef(iterator)
+              ret
+            end
+          end
         end
 
-        def self.repr(obj)
-          repr_str_obj = PyObject_Repr(obj)
-          repr_str = PyString_AsString(repr_str_obj).dup
-          Py_DecRef(repr_str_obj)
-          repr_str
+        def str(obj)
+          buffer = FFI::MemoryPointer.new(:pointer)
+          length = FFI::MemoryPointer.new(LibPy.ssize_t_type)
+          LibPy.PyString_AsStringAndSize(obj, buffer, length)
+          buffer.read_pointer.read_string(length.send("read_#{LibPy.ssize_t_type}"))
         end
 
-        def self.none
-          builtins = PyImport_AddModule('__builtins__')
-          PyObject_GetAttrString(builtins, '__doc__')
+        def dict(obj)
+          ret = {}
+          ppos = FFI::MemoryPointer.new(LibPy.ssize_t_type)
+          ppos.send("write_#{LibPy.ssize_t_type}", 0)
+          pkey = FFI::MemoryPointer.new(:pointer)
+          pvalue = FFI::MemoryPointer.new(:pointer)
+          while LibPy.PyDict_Next(obj, ppos, pkey, pvalue) == 1
+            key = convert(pkey.read_pointer)
+            value = convert(pvalue.read_pointer)
+            ret[key] = value
+          end
+          ret
+        end
+
+        def iterable(iterator, obj)
+          ret = []
+          while (itobj = LibPy.PyIter_Next(iterator)) && !itobj.null?
+            ret << convert(itobj)
+            LibPy.Py_DecRef(itobj)
+          end
+          ret
         end
       end
     end
@@ -126,6 +203,11 @@ module ChefFunnel
       end
       LibPy.PyModule_AddObject(chef_mod, 'debug', debug_fn)
       file_fn = create_keyword_method('file') do |args, kwargs|
+        @recipe.send('file', args[0]) do
+          kwargs.each do |key, value|
+            send(key, value)
+          end
+        end
         nil
       end
       LibPy.PyModule_AddObject(chef_mod, 'file', file_fn)
@@ -167,10 +249,10 @@ module ChefFunnel
       LibPy.module_eval do
         method_def = self::PyMethodDefWithKeywords.new
         method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
-        method_def[:ml_flags] = self::METH_KEYWORDS
+        method_def[:ml_flags] = self::METH_KEYWORDS | self::METH_VARARGS
         method_def[:ml_doc] = 0
         ruby_fn = lambda do |pyself, args, kwargs|
-          ret = block.call(args, kwargs)
+          ret = block.call(self::ConvertTypes.convert(args), self::ConvertTypes.convert(kwargs))
           ret = none if ret.nil?
           ret
         end
