@@ -39,14 +39,15 @@ module ChefFunnel
           # int PyDict_SetItemString(PyObject *p, const char *key, PyObject *val)
           attach_function :PyDict_SetItemString, [:pointer, :string, :pointer], :int
           # typedef PyObject *(*PyCFunction)(PyObject *, PyObject *);
-          callback :pycfunction, [:pointer, :pointer], :pointer
-          pycfunction = find_type :pycfunction
+          # typedef PyObject *(*PyCFunctionWithKeywords)(PyObject *, PyObject *, PyObject *);
+          callback :pycfunctionwithkeywords, [:pointer, :pointer, :pointer], :pointer
+          pycfunctionwithkeywords = find_type :pycfunctionwithkeywords
           # struct PyMethodDef {
           pymethoddef = Class.new(::FFI::Struct) do
             # const char  *ml_name; /* The name of the built-in function/method */
             layout :ml_name, :pointer,
             # PyCFunction  ml_meth; /* The C function that implements it */
-                   :ml_meth, pycfunction,
+                   :ml_meth, pycfunctionwithkeywords,
             #     int    ml_flags;  /* Combination of METH_xxx flags, which mostly
             #                          describe the args expected by the C func */
                    :ml_flags, :int,
@@ -54,17 +55,6 @@ module ChefFunnel
                    :ml_doc, :pointer
           end
           const_set :PyMethodDef, pymethoddef
-          # typedef PyObject *(*PyCFunctionWithKeywords)(PyObject *, PyObject *, PyObject *);
-          callback :pycfunctionwithkeywords, [:pointer, :pointer, :pointer], :pointer
-          pycfunctionwithkeywords = find_type :pycfunctionwithkeywords
-          # Python shoves multiple callback types into the PyCFunction*, RAGE
-          pymethoddefwithkeywords = Class.new(::FFI::Struct) do
-            layout :ml_name, :pointer,
-                   :ml_meth, pycfunctionwithkeywords,
-                   :ml_flags, :int,
-                   :ml_doc, :pointer
-          end
-          const_set :PyMethodDefWithKeywords, pymethoddefwithkeywords
           # PyObject *PyCFunction_NewEx(PyMethodDef *ml, PyObject *self, PyObject *module)
           attach_function :PyCFunction_NewEx, [pymethoddef, :pointer, :pointer], :pointer
           # int PyArg_ParseTuple(PyObject *args, const char *format, ...)
@@ -195,22 +185,21 @@ module ChefFunnel
       LibPy.Py_InitializeEx(0)
       chef_mod = create_module('chef')
       debug_fn = create_method('debug') do |args|
-        msgptr = FFI::MemoryPointer.new(:pointer)
-        LibPy.PyArg_ParseTuple(args, 's', :pointer, msgptr)
-        msg = msgptr.read_pointer().read_string()
-        Chef::Log.debug(msg)
+        Chef::Log.debug(args[0])
         nil
       end
       LibPy.PyModule_AddObject(chef_mod, 'debug', debug_fn)
-      file_fn = create_keyword_method('file') do |args, kwargs|
-        @recipe.send('file', args[0]) do
-          kwargs.each do |key, value|
-            send(key, value)
+      each_resource do |res_name|
+        res_fn = create_method(res_name) do |args, kwargs|
+          @recipe.send(res_name, args[0]) do
+            kwargs.each do |key, value|
+              send(key, value)
+            end if kwargs
           end
+          nil
         end
-        nil
+        LibPy.PyModule_AddObject(chef_mod, res_name, res_fn)
       end
-      LibPy.PyModule_AddObject(chef_mod, 'file', file_fn)
       run_file(filename)
       LibPy.Py_Finalize()
       LibPy.ruby_fns.clear
@@ -229,30 +218,12 @@ module ChefFunnel
       LibPy.module_eval do
         method_def = self::PyMethodDef.new
         method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
-        method_def[:ml_flags] = self::METH_VARARGS
-        method_def[:ml_doc] = 0
-        ruby_fn = lambda do |pyself, args|
-          ret = block.call(args)
-          ret = none if ret.nil?
-          ret
-        end
-        ruby_fns << ruby_fn # To prevent GC
-        method_def[:ml_meth] = ruby_fn
-        name_str_obj = PyString_FromString(name)
-        fn = PyCFunction_NewEx(method_def, nil, name_str_obj)
-        Py_DecRef(name_str_obj)
-        fn
-      end
-    end
-
-    def create_keyword_method(name, &block)
-      LibPy.module_eval do
-        method_def = self::PyMethodDefWithKeywords.new
-        method_def[:ml_name] = FFI::MemoryPointer.from_string(name)
         method_def[:ml_flags] = self::METH_KEYWORDS | self::METH_VARARGS
         method_def[:ml_doc] = 0
         ruby_fn = lambda do |pyself, args, kwargs|
-          ret = block.call(self::ConvertTypes.convert(args), self::ConvertTypes.convert(kwargs))
+          args = self::ConvertTypes.convert(args)
+          kwargs = kwargs.null? ? nil :  self::ConvertTypes.convert(kwargs)
+          ret = block.call(args, kwargs)
           ret = none if ret.nil?
           ret
         end
