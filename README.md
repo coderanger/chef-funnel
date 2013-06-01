@@ -4,7 +4,7 @@ Okay, consider yourself warned. The ``funnel`` cookbook provides a way to
 write Chef recipes in Javascript or Python. Just put a ``.js`` or ``.py`` file in your recipes folder
 just like you would with a normal Ruby recipe.
 
-## Example Javscript recipe
+## Example Javascript recipe
 
 The resource syntax is a pretty direct mapping from Ruby:
 
@@ -30,7 +30,7 @@ template('/tmp/another', {
 });
 ```
 
-## Example Python receipe
+## Example Python recipe
 
 As above, pretty simple mapping, except all methods live under the ``chef`` module.
 The node object is not yet exposed to Python:
