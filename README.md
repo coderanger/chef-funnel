@@ -45,7 +45,6 @@ chef.file('/tmp/something',
     mode='600',
     content='secret')
 
-# You can also import * if you prefer
 from chef import file, template
 
 file('/tmp/something', action='delete')
